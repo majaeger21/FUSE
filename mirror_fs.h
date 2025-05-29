@@ -8,6 +8,6 @@ typedef struct {
 } MirData;
 
 void mir_usage();
-void mir_path(char fpath[PATH_MAX], const char *path, const char *mir_dir);
+void mir_path(char fpath[PATH_MAX], const char *path);
 
 #endif

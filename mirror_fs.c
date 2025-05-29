@@ -388,8 +388,10 @@ void mir_usage() {
 }
 
 /* Append path to mirror directory. Haven't tested this yet. */
-void mir_path(char fpath[PATH_MAX], const char *path, const char *mir_dir) {
-    snprintf(fpath, PATH_MAX, "%s%s", mir_dir, path);
+void mir_path(char fpath[PATH_MAX], const char *path) {
+    struct fuse_context *ctx = fuse_get_context();
+    MirData *m_data = (MirData *) ctx->private_data;
+    snprintf(fpath, PATH_MAX, "%s%s", m_data->mir_dir, path);
 }
 
 int main(int argc, char *argv[])
