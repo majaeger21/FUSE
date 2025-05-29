@@ -387,6 +387,10 @@ void mir_usage() {
     exit(EXIT_FAILURE);    
 }
 
+void mir_path(char fpath[PATH_MAX], const char *path, const char *mir_dir) {
+     
+}
+
 int main(int argc, char *argv[])
 {
     MirData m_data;
@@ -396,6 +400,12 @@ int main(int argc, char *argv[])
         mir_usage();    
     } 
 
-    m_data.mir_dir = argv[argc-1];
-    return fuse_main(argc, argv, &xmp_oper, &m_data);
+    // Get full path to mirror directory
+    if (!(m_data.mir_dir = realpath(argv[argc-1], NULL))) {
+        perror("realpath");
+        exit(EXIT_FAILURE);
+    }
+    int ret =  fuse_main(argc, argv, &xmp_oper, &m_data);
+    free(m_data.mir_dir);
+    return ret;
 }
