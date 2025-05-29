@@ -389,8 +389,7 @@ void mir_usage() {
 
 /* Append path to mirror directory. Haven't tested this yet. */
 void mir_path(char fpath[PATH_MAX], const char *path, const char *mir_dir) {
-    strcpy(fpath, mir_dir);
-    strncat(fpath, path, PATH_MAX); 
+    snprintf(fpath, PATH_MAX, "%s%s", mir_dir, path);
 }
 
 int main(int argc, char *argv[])
