@@ -17,8 +17,11 @@
 #define _XOPEN_SOURCE 500
 #endif
 
+#include "mirror_fs.h"
+
 #include <fuse.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -376,8 +379,23 @@ static struct fuse_operations xmp_oper = {
 #endif
 };
 
+void mir_usage() {
+    fprintf(
+        stderr,
+        "usage: mirror_fs [FUSE options] <mountpoint> <directory to mirror>\n"
+    );
+    exit(EXIT_FAILURE);    
+}
+
 int main(int argc, char *argv[])
 {
+    MirData m_data;
+ 
     umask(0);
-    return fuse_main(argc, argv, &xmp_oper, NULL);
+    if (argc < 3) {
+        mir_usage();    
+    } 
+
+    m_data.mir_dir = argv[argc-1];
+    return fuse_main(argc, argv, &xmp_oper, &m_data);
 }
