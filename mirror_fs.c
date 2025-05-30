@@ -173,8 +173,13 @@ static int xmp_rmdir(const char *path)
 static int xmp_symlink(const char *from, const char *to)
 {
     int res;
+    char from_fpath[PATH_MAX];
+    char to_fpath[PATH_MAX];
 
-    res = symlink(from, to);
+    mir_path(from_fpath, from);
+    mir_path(to_fpath, to);
+
+    res = symlink(from_fpath, to_fpath);
     if (res == -1)
         return -errno;
 
@@ -184,8 +189,13 @@ static int xmp_symlink(const char *from, const char *to)
 static int xmp_rename(const char *from, const char *to)
 {
     int res;
+    char from_fpath[PATH_MAX];
+    char to_fpath[PATH_MAX];
 
-    res = rename(from, to);
+    mir_path(from_fpath, from);
+    mir_path(to_fpath, to);
+
+    res = rename(from_fpath, to_fpath);
     if (res == -1)
         return -errno;
 
@@ -195,8 +205,13 @@ static int xmp_rename(const char *from, const char *to)
 static int xmp_link(const char *from, const char *to)
 {
     int res;
+    char from_fpath[PATH_MAX];
+    char to_fpath[PATH_MAX];
 
-    res = link(from, to);
+    mir_path(from_fpath, from);
+    mir_path(to_fpath, to);
+
+    res = link(from_fpath, to_fpath);
     if (res == -1)
         return -errno;
 
@@ -439,7 +454,7 @@ void mir_usage() {
 void mir_path(char fpath[PATH_MAX], const char *path) {
     struct fuse_context *ctx = fuse_get_context();
     MirData *m_data = (MirData *) ctx->private_data;
-    snprintf(fpath, PATH_MAX, "%s%s", m_data->mir_dir, path);
+    snprintf(fpath, PATH_MAX, "%s/%s", m_data->mir_dir, path);
 }
 
 int main(int argc, char *argv[])
