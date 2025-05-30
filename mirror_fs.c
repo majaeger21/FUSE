@@ -460,11 +460,16 @@ void mir_path(char fpath[PATH_MAX], const char *path) {
 int main(int argc, char *argv[])
 {
     MirData m_data;
+    char passphrase[PATH_MAX];
  
     umask(0);
     if (argc < 3) {
         mir_usage();    
     } 
+
+    // Get passphrase from user to be used to derive an encryption key
+    printf("Please enter passphrase: ");
+    scanf("%s", passphrase);
 
     // Get full path to mirror directory
     if (!(m_data.mir_dir = realpath(argv[argc-1], NULL))) {
