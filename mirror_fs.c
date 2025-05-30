@@ -35,8 +35,11 @@
 static int xmp_getattr(const char *path, struct stat *stbuf)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = lstat(path, stbuf);
+    mir_path(fpath, path);
+
+    res = lstat(fpath, stbuf);
     if (res == -1)
         return -errno;
 
@@ -72,11 +75,14 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 {
     DIR *dp;
     struct dirent *de;
+    char fpath[PATH_MAX];
+
+    mir_path(fpath, path);
 
     (void) offset;
     (void) fi;
 
-    dp = opendir(path);
+    dp = opendir(fpath);
     if (dp == NULL)
         return -errno;
 
@@ -408,6 +414,10 @@ int main(int argc, char *argv[])
         perror("realpath");
         exit(EXIT_FAILURE);
     }
+    // removes the mirror directory from argc/argv since fuse_main only takes mountpoint
+    argv[argc-1] = NULL;
+    argc--;
+
     int ret =  fuse_main(argc, argv, &xmp_oper, &m_data);
     free(m_data.mir_dir);
     return ret;
