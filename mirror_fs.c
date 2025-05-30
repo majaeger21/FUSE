@@ -49,8 +49,11 @@ static int xmp_getattr(const char *path, struct stat *stbuf)
 static int xmp_access(const char *path, int mask)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = access(path, mask);
+    mir_path(fpath, path);
+
+    res = access(fpath, mask);
     if (res == -1)
         return -errno;
 
@@ -60,8 +63,11 @@ static int xmp_access(const char *path, int mask)
 static int xmp_readlink(const char *path, char *buf, size_t size)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = readlink(path, buf, size - 1);
+    mir_path(fpath, path);
+
+    res = readlink(fpath, buf, size - 1);
     if (res == -1)
         return -errno;
 
@@ -102,17 +108,20 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
 {
     int res;
+    char fpath[PATH_MAX];
+
+    mir_path(fpath, path);
 
     /* On Linux this could just be 'mknod(path, mode, rdev)' but this
        is more portable */
     if (S_ISREG(mode)) {
-        res = open(path, O_CREAT | O_EXCL | O_WRONLY, mode);
+        res = open(fpath, O_CREAT | O_EXCL | O_WRONLY, mode);
         if (res >= 0)
             res = close(res);
     } else if (S_ISFIFO(mode))
-        res = mkfifo(path, mode);
+        res = mkfifo(fpath, mode);
     else
-        res = mknod(path, mode, rdev);
+        res = mknod(fpath, mode, rdev);
     if (res == -1)
         return -errno;
 
@@ -122,8 +131,11 @@ static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
 static int xmp_mkdir(const char *path, mode_t mode)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = mkdir(path, mode);
+    mir_path(fpath, path);
+
+    res = mkdir(fpath, mode);
     if (res == -1)
         return -errno;
 
@@ -133,8 +145,11 @@ static int xmp_mkdir(const char *path, mode_t mode)
 static int xmp_unlink(const char *path)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = unlink(path);
+    mir_path(fpath, path);
+
+    res = unlink(fpath);
     if (res == -1)
         return -errno;
 
@@ -144,8 +159,11 @@ static int xmp_unlink(const char *path)
 static int xmp_rmdir(const char *path)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = rmdir(path);
+    mir_path(fpath, path);
+
+    res = rmdir(fpath);
     if (res == -1)
         return -errno;
 
@@ -188,8 +206,11 @@ static int xmp_link(const char *from, const char *to)
 static int xmp_chmod(const char *path, mode_t mode)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = chmod(path, mode);
+    mir_path(fpath, path);
+
+    res = chmod(fpath, mode);
     if (res == -1)
         return -errno;
 
@@ -199,8 +220,11 @@ static int xmp_chmod(const char *path, mode_t mode)
 static int xmp_chown(const char *path, uid_t uid, gid_t gid)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = lchown(path, uid, gid);
+    mir_path(fpath, path);
+
+    res = lchown(fpath, uid, gid);
     if (res == -1)
         return -errno;
 
@@ -210,8 +234,11 @@ static int xmp_chown(const char *path, uid_t uid, gid_t gid)
 static int xmp_truncate(const char *path, off_t size)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = truncate(path, size);
+    mir_path(fpath, path);
+
+    res = truncate(fpath, size);
     if (res == -1)
         return -errno;
 
@@ -221,6 +248,9 @@ static int xmp_truncate(const char *path, off_t size)
 static int xmp_utimens(const char *path, const struct timespec ts[2])
 {
     int res;
+    char fpath[PATH_MAX];
+
+    mir_path(fpath, path);
     struct timeval tv[2];
 
     tv[0].tv_sec = ts[0].tv_sec;
@@ -228,7 +258,7 @@ static int xmp_utimens(const char *path, const struct timespec ts[2])
     tv[1].tv_sec = ts[1].tv_sec;
     tv[1].tv_usec = ts[1].tv_nsec / 1000;
 
-    res = utimes(path, tv);
+    res = utimes(fpath, tv);
     if (res == -1)
         return -errno;
 
@@ -238,8 +268,11 @@ static int xmp_utimens(const char *path, const struct timespec ts[2])
 static int xmp_open(const char *path, struct fuse_file_info *fi)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = open(path, fi->flags);
+    mir_path(fpath, path);
+
+    res = open(fpath, fi->flags);
     if (res == -1)
         return -errno;
 
@@ -252,9 +285,12 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 {
     int fd;
     int res;
+    char fpath[PATH_MAX];
+
+    mir_path(fpath, path);
 
     (void) fi;
-    fd = open(path, O_RDONLY);
+    fd = open(fpath, O_RDONLY);
     if (fd == -1)
         return -errno;
 
@@ -271,9 +307,12 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 {
     int fd;
     int res;
+    char fpath[PATH_MAX];
+
+    mir_path(fpath, path);
 
     (void) fi;
-    fd = open(path, O_WRONLY);
+    fd = open(fpath, O_WRONLY);
     if (fd == -1)
         return -errno;
 
@@ -288,8 +327,11 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 static int xmp_statfs(const char *path, struct statvfs *stbuf)
 {
     int res;
+    char fpath[PATH_MAX];
 
-    res = statvfs(path, stbuf);
+    mir_path(fpath, path);
+
+    res = statvfs(fpath, stbuf);
     if (res == -1)
         return -errno;
 
