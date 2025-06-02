@@ -15,8 +15,6 @@
 #define IV_LEN 16
 #define TAG_LEN 16
 
-// #include <config.h>
-
 #ifdef linux
 /* For pread()/pwrite() */
 #define _XOPEN_SOURCE 500
@@ -317,10 +315,6 @@ static int xmp_open(const char *path, struct fuse_file_info *fi)
 static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi)
 {
-    fprintf(stderr, "DEBUG: xmp_read() called for %s\n", path);
-    fflush(stderr);
-
-
     int fd, res, decrypted_len;
     char fpath[PATH_MAX];
     mir_path(fpath, path);
@@ -344,21 +338,15 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 
     ssize_t rlen = read(fd, file_data, st.st_size);
     if (rlen!= st.st_size) {
-        fprintf(stderr, "DEBUG >>> WARNING: Only read %zd of %lld bytes\n", rlen, (long long)st.st_size);
-
         free(file_data);
         close(fd);
         return -errno;
     }
     close(fd);
 
-    fprintf(stderr, "DEBUG >>> File header was '%.5s'\n", file_data);
-
     struct fuse_context *ctx = fuse_get_context();
     MirData *m_data = (MirData *) ctx->private_data;
     unsigned char *key = m_data->key;
-    // unsigned char key[32] = {0};  // TEMPPPPP key
-    // memset(key, 1, 32);           // FIXME: use real derived key later TEMPPPPP
 
     unsigned char *plaintext = malloc(st.st_size);  // ciphertext is always ≥ plaintext
     if (!plaintext) {
@@ -367,7 +355,6 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
     }
 
     decrypted_len = decrypt_data(file_data, rlen, key, plaintext);
-    fprintf(stderr, "DEBUG >>> Decrypted length = %d\n", decrypted_len);
 
     res = 0;
     if (decrypted_len == -2) {
@@ -401,8 +388,6 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     char fpath[PATH_MAX];
     mir_path(fpath, path);
 
-    // unsigned char key[32] = {0};  // TEMP static key
-    // memset(key, 1, 32);           // FIXME: use passphrase later
     struct fuse_context *ctx = fuse_get_context();
     MirData *m_data = (MirData *) ctx->private_data;
     unsigned char *key = m_data->key;
@@ -541,14 +526,11 @@ void mir_usage() {
     exit(EXIT_FAILURE);    
 }
 
-/* Append path to mirror directory. Haven't tested this yet. */
+/* Append path to mirror directory */
 void mir_path(char fpath[PATH_MAX], const char *path) {
     struct fuse_context *ctx = fuse_get_context();
     MirData *m_data = (MirData *) ctx->private_data;
     snprintf(fpath, PATH_MAX, "%s/%s", m_data->mir_dir, path);
-
-    fprintf(stderr, "DEBUG: mir_path('%s') → '%s'\n", path, fpath);
-    fflush(stderr);
 }
 
 //////////////////// ENCRYPT/DECRYPT OPERATIONS ////////////////////
@@ -588,24 +570,12 @@ int encrypt_data(const unsigned char *plaintext, int plaintext_len,
 
 int decrypt_data(const unsigned char *ciphertext, int ciphertext_len,
                  const unsigned char *key, unsigned char *plaintext) {
-
-    fprintf(stderr, "DEBUG: decrypt_data() called with length = %d\n", ciphertext_len);
-    fflush(stderr);
-    fprintf(stderr, "DEBUG: first few bytes = '%.*s'\n", ENC_HEADER_LEN, ciphertext);
-    fflush(stderr);
-
     
     if (ciphertext_len < ENC_HEADER_LEN + IV_LEN + TAG_LEN) {
-        fprintf(stderr, "DEBUG: ciphertext too short for ENCFS format\n");
-        fflush(stderr);
-
         return -2;
     }
 
     if (memcmp(ciphertext, ENC_HEADER, ENC_HEADER_LEN) != 0) {
-        fprintf(stderr, "DEBUG: header mismatch — treating as plaintext\n");
-        fflush(stderr);
-
         return -2; // Not encrypted — plaintext passthrough
     }
 
@@ -664,9 +634,6 @@ int derive_key(const char *passphrase, const unsigned char *salt, unsigned char 
 
 int main(int argc, char *argv[])
 {
-    fprintf(stderr, "DEBUG: main() started\n");
-    fflush(stderr);
-
     MirData m_data;
     char passphrase[PATH_MAX];
  
@@ -698,7 +665,6 @@ int main(int argc, char *argv[])
             exit(EXIT_FAILURE);
         }
         fclose(salt_file);
-        fprintf(stderr, "DEBUG: Loaded existing salt from %s\n", salt_path);
     } else {
         if (RAND_bytes(salt, 16) != 1) {
             fprintf(stderr, "Failed to generate salt\n");
@@ -712,7 +678,6 @@ int main(int argc, char *argv[])
             exit(EXIT_FAILURE);
         }
         fclose(salt_file);
-        fprintf(stderr, "DEBUG: Created new salt at %s\n", salt_path);
     }
 
     if (derive_key(passphrase, salt, m_data.key) != 0) {
@@ -725,5 +690,6 @@ int main(int argc, char *argv[])
 
     int ret =  fuse_main(argc, argv, &xmp_oper, &m_data);
     free(m_data.mir_dir);
+    memset(passphrase, 0, sizeof(passphrase));
     return ret;
 }
