@@ -1,11 +1,9 @@
 CC = gcc
-CFLAGS = -Wall -g -D_FILE_OFFSET_BITS=64 `pkg-config fuse --cflags --libs` -lcrypto
+CFLAGS = -Wall -std=gnu99
+LDFLAGS = `pkg-config fuse --cflags --libs` -lcrypto
 
-TARGETS = mirror_fs
-
-all: $(TARGETS)
+mirror_fs: mirror_fs.c mirror_fs.h
+	$(CC) $(CFLAGS) mirror_fs.c -o mirror_fs $(LDFLAGS)
 
 clean:
-	rm -f $(TARGETS)
-
-.PHONY: all clean
+	rm -f mirror_fs
