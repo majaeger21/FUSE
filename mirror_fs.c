@@ -354,9 +354,11 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 
     fprintf(stderr, "DEBUG >>> File header was '%.5s'\n", file_data);
 
-
-    unsigned char key[32] = {0};  // TEMP key (same as write)
-    memset(key, 1, 32);           // FIXME: use real derived key later
+    struct fuse_context *ctx = fuse_get_context();
+    MirData *m_data = (MirData *) ctx->private_data;
+    unsigned char *key = m_data->key;
+    // unsigned char key[32] = {0};  // TEMPPPPP key
+    // memset(key, 1, 32);           // FIXME: use real derived key later TEMPPPPP
 
     unsigned char *plaintext = malloc(st.st_size);  // ciphertext is always ≥ plaintext
     if (!plaintext) {
@@ -399,9 +401,11 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     char fpath[PATH_MAX];
     mir_path(fpath, path);
 
-     // For now: ignore offset and overwrite the whole file
-    unsigned char key[32] = {0};  // TEMP static key
-    memset(key, 1, 32);           // FIXME: use passphrase later
+    // unsigned char key[32] = {0};  // TEMP static key
+    // memset(key, 1, 32);           // FIXME: use passphrase later
+    struct fuse_context *ctx = fuse_get_context();
+    MirData *m_data = (MirData *) ctx->private_data;
+    unsigned char *key = m_data->key;
 
     unsigned char *ciphertext = malloc(size + 1024); // Padding for header/IV/tag
     if (!ciphertext) return -ENOMEM;
@@ -644,6 +648,18 @@ int decrypt_data(const unsigned char *ciphertext, int ciphertext_len,
     return -1;
 }
 
+int derive_key(const char *passphrase, const unsigned char *salt, unsigned char *key_out) {
+    if (PKCS5_PBKDF2_HMAC(passphrase, strlen(passphrase),
+                          salt, 16,
+                          100000,
+                          EVP_sha256(),
+                          32, key_out) != 1) {
+        fprintf(stderr, "Failed to derive encryption key\n");
+        return -1;
+    }
+    return 0;
+}
+
 //////////////////// MAIN FUNCTION ////////////////////
 
 int main(int argc, char *argv[])
@@ -668,7 +684,42 @@ int main(int argc, char *argv[])
         perror("realpath");
         exit(EXIT_FAILURE);
     }
-    // removes the mirror directory from argc/argv since fuse_main only takes mountpoint
+
+    // Salt logic
+    unsigned char salt[16];
+    char salt_path[PATH_MAX];
+    snprintf(salt_path, PATH_MAX, "%s/.salt", m_data.mir_dir);
+
+    FILE *salt_file = fopen(salt_path, "rb");
+    if (salt_file) {
+        if (fread(salt, 1, 16, salt_file) != 16) {
+            fprintf(stderr, "Failed to read salt from file\n");
+            fclose(salt_file);
+            exit(EXIT_FAILURE);
+        }
+        fclose(salt_file);
+        fprintf(stderr, "DEBUG: Loaded existing salt from %s\n", salt_path);
+    } else {
+        if (RAND_bytes(salt, 16) != 1) {
+            fprintf(stderr, "Failed to generate salt\n");
+            exit(EXIT_FAILURE);
+        }
+
+        salt_file = fopen(salt_path, "wb");
+        if (!salt_file || fwrite(salt, 1, 16, salt_file) != 16) {
+            fprintf(stderr, "Failed to write salt to file\n");
+            if (salt_file) fclose(salt_file);
+            exit(EXIT_FAILURE);
+        }
+        fclose(salt_file);
+        fprintf(stderr, "DEBUG: Created new salt at %s\n", salt_path);
+    }
+
+    if (derive_key(passphrase, salt, m_data.key) != 0) {
+        exit(EXIT_FAILURE);
+    }
+
+    // Removes the mirror directory from argc/argv since fuse_main only takes mountpoint
     argv[argc-1] = NULL;
     argc--;
 

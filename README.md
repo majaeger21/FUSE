@@ -24,7 +24,10 @@
   fusermount -u /tmp/mirror_mnt2 2>/dev/null || true
   umount -fl /tmp/mirror_mnt 2>/dev/null || true
   umount -fl /tmp/mirror_mnt2 2>/dev/null || true
-3. ps aux | grep mirror_fs
+3. rm /tmp/mirror_src/.salt
+4. ps aux | grep mirror_fs     --> check if all other processes are killed
+5. make clean && make
+6. ./mirror_fs -o nonempty /tmp/mirror_mnt /tmp/mirror_src
 
 ### Get into running container in another terminal
 - docker exec -it my_persistent_container /bin/bash

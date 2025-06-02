@@ -20,10 +20,9 @@ void mir_usage();
 void mir_path(char fpath[PATH_MAX], const char *path);
 
 // Encryption helper functions
-int derive_key(const char *passphrase, unsigned char *salt, unsigned char *key);
+int derive_key(const char *passphrase, const unsigned char *salt, unsigned char *key_out);
 int encrypt_data(const unsigned char *plaintext, int plaintext_len, 
                  const unsigned char *key, unsigned char *ciphertext);
 int decrypt_data(const unsigned char *ciphertext, int ciphertext_len,
-                 const unsigned char *key, unsigned char *plaintext) ;
-
+                 const unsigned char *key, unsigned char *plaintext);
 #endif
