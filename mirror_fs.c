@@ -52,11 +52,9 @@ static int xmp_getattr(const char *path, struct stat *stbuf)
     fflush(stderr);
 
     res = lstat(fpath, stbuf);
-    if (res == -1)
-        fprintf(stderr, "DEBUG: lstat failed with errno = %d (%s)\n", errno, strerror(errno));
-        fflush(stderr);
+    if (res == -1) {
         return -errno;
-
+    }
     return 0;
 }
 
