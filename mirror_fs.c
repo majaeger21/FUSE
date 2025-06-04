@@ -13,7 +13,6 @@
 #define ENC_HEADER "ENCFS"
 #define ENC_HEADER_LEN 5
 #define IV_LEN 16
-#define TAG_LEN 16
 
 #ifdef linux
 /* For pread()/pwrite() */
@@ -587,63 +586,69 @@ void mir_path(char fpath[PATH_MAX], const char *path) {
 
 //////////////////// ENCRYPT/DECRYPT OPERATIONS ////////////////////
 
+
 int encrypt_data(const unsigned char *plaintext, int plaintext_len, 
                  const unsigned char *key, unsigned char *ciphertext) {
-
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return -1;
 
     unsigned char iv[IV_LEN];
-    if (RAND_bytes(iv, IV_LEN) != 1) return -1;
+    if (RAND_bytes(iv, IV_LEN) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
 
     int len, ciphertext_len;
 
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) return -1;
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, IV_LEN, NULL) != 1) return -1;
-    if (EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1) return -1;
+    // Initialize encryption operation
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
 
-    // Write header and IV
+    // Write header and IV to output
     memcpy(ciphertext, ENC_HEADER, ENC_HEADER_LEN);
     memcpy(ciphertext + ENC_HEADER_LEN, iv, IV_LEN);
 
-    if (EVP_EncryptUpdate(ctx, ciphertext + ENC_HEADER_LEN + IV_LEN, &len, plaintext, plaintext_len) != 1) return -1;
+    // Encrypt the plaintext
+    if (EVP_EncryptUpdate(ctx, ciphertext + ENC_HEADER_LEN + IV_LEN, &len, plaintext, plaintext_len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
     ciphertext_len = len;
 
-    if (EVP_EncryptFinal_ex(ctx, ciphertext + ENC_HEADER_LEN + IV_LEN + ciphertext_len, &len) != 1) return -1;
+    // Finalize encryption (handles padding)
+    if (EVP_EncryptFinal_ex(ctx, ciphertext + ENC_HEADER_LEN + IV_LEN + ciphertext_len, &len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
     ciphertext_len += len;
 
-    unsigned char tag[TAG_LEN];
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, TAG_LEN, tag) != 1) return -1;
-    memcpy(ciphertext + ENC_HEADER_LEN + IV_LEN + ciphertext_len, tag, TAG_LEN);
-
     EVP_CIPHER_CTX_free(ctx);
-    return ENC_HEADER_LEN + IV_LEN + ciphertext_len + TAG_LEN;
+    return ENC_HEADER_LEN + IV_LEN + ciphertext_len;
 }
 
 int decrypt_data(const unsigned char *ciphertext, int ciphertext_len,
                  const unsigned char *key, unsigned char *plaintext) {
-    
-    if (ciphertext_len < ENC_HEADER_LEN + IV_LEN + TAG_LEN) {
+    if (ciphertext_len < ENC_HEADER_LEN + IV_LEN) {
         return -2;
     }
 
+    // not encrypted — plaintext passthrough
     if (memcmp(ciphertext, ENC_HEADER, ENC_HEADER_LEN) != 0) {
-        return -2; // Not encrypted — plaintext passthrough
+        return -2; 
     }
 
     const unsigned char *iv = ciphertext + ENC_HEADER_LEN;
     const unsigned char *ct = iv + IV_LEN;
-    int ct_len = ciphertext_len - ENC_HEADER_LEN - IV_LEN - TAG_LEN;
-    const unsigned char *tag = ciphertext + ciphertext_len - TAG_LEN;
+    int ct_len = ciphertext_len - ENC_HEADER_LEN - IV_LEN;
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return -1;
 
     int len, plaintext_len;
 
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, IV_LEN, NULL) != 1 ||
-        EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1) {
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
@@ -654,11 +659,7 @@ int decrypt_data(const unsigned char *ciphertext, int ciphertext_len,
     }
     plaintext_len = len;
 
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, TAG_LEN, (void *)tag) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        return -1;
-    }
-
+    // handle padding
     int ret = EVP_DecryptFinal_ex(ctx, plaintext + len, &len);
     EVP_CIPHER_CTX_free(ctx);
 
@@ -667,7 +668,7 @@ int decrypt_data(const unsigned char *ciphertext, int ciphertext_len,
         return plaintext_len;
     }
 
-    return -1;
+    return -1;  // Decryption failed 
 }
 
 int derive_key(const char *passphrase, const unsigned char *salt, unsigned char *key_out) {
