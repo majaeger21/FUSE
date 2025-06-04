@@ -310,16 +310,12 @@ static int xmp_open(const char *path, struct fuse_file_info *fi)
     return 0;
 }
 
-static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
-                    struct fuse_file_info *fi)
+static int read_and_decrypt(const char *fpath, unsigned char *key, unsigned char **plaintext_out, size_t *p_length_out) 
 {
-    int fd, res, decrypted_len;
-    char fpath[PATH_MAX];
-    mir_path(fpath, path);
+    int fd, decrypted_len;
 
-    (void) fi;
     fd = open(fpath, O_RDONLY);
-    if (fd == -1)
+    if (fd == -1) 
         return -errno;
 
     struct stat st;
@@ -342,10 +338,6 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
     }
     close(fd);
 
-    struct fuse_context *ctx = fuse_get_context();
-    MirData *m_data = (MirData *) ctx->private_data;
-    unsigned char *key = m_data->key;
-
     unsigned char *plaintext = malloc(st.st_size);  // ciphertext is always ≥ plaintext
     if (!plaintext) {
         free(file_data);
@@ -354,29 +346,57 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 
     decrypted_len = decrypt_data(file_data, rlen, key, plaintext);
 
-    res = 0;
     if (decrypted_len == -2) {
-        // Plaintext passthrough
-        if (offset < st.st_size) {
-            if (offset + size > st.st_size)
-                size = st.st_size - offset;
-            memcpy(buf, file_data + offset, size);
-            res = size;
-        }
-    } else if (decrypted_len >= 0) {
-        if (offset < decrypted_len) {
-            if (offset + size > decrypted_len)
-                size = decrypted_len - offset;
-            memcpy(buf, plaintext + offset, size);
-            res = size;
-        }
-    } else {
-        res = -EIO;  // Decryption failed
+        // Plaintext passthrough - using original file_data as plaintext
+        *plaintext_out = file_data;
+        *p_length_out = st.st_size;
+        free(plaintext);  
+        return 1; // Special return value to indicate passthrough
     }
 
-    free(file_data);
-    free(plaintext);
-    return res;
+    free(file_data);  // No longer needed
+
+    if (decrypted_len < 0) {
+        free(plaintext);
+        return -EIO;
+    }
+
+    *plaintext_out = plaintext;
+    *p_length_out = decrypted_len;
+    return 0;  // Success
+}
+
+static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
+                    struct fuse_file_info *fi)
+{
+    char fpath[PATH_MAX];
+    mir_path(fpath, path);
+    (void) fi;
+
+    struct fuse_context *ctx = fuse_get_context();
+    MirData *m_data = (MirData *) ctx->private_data;
+    unsigned char *key = m_data->key;
+
+    unsigned char *plaintext = NULL;
+    size_t plain_length = 0;
+
+    int status = read_and_decrypt(fpath, key, &plaintext, &plain_length);
+    if (status < 0)
+        return status;
+
+    // Bounds check
+    if (offset < plain_length) {
+        if (offset + size > plain_length)
+            size = plain_length - offset;
+        memcpy(buf, plaintext + offset, size);
+    } else {
+        size = 0;
+    }
+
+    if (status == 1) free(plaintext);  // Was passthrough (file_data)
+    else free(plaintext);              // Was decrypted
+
+    return size;
 }
 
 static int xmp_write(const char *path, const char *buf, size_t size,
@@ -390,10 +410,44 @@ static int xmp_write(const char *path, const char *buf, size_t size,
     MirData *m_data = (MirData *) ctx->private_data;
     unsigned char *key = m_data->key;
 
-    unsigned char *ciphertext = malloc(size + 1024); // Padding for header/IV/tag
-    if (!ciphertext) return -ENOMEM;
+    unsigned char *existing_plain = NULL;
+    size_t existing_length = 0;
+    unsigned char *new_plaintext;
+    size_t plain_length = 0;
 
-    enc_len = encrypt_data((unsigned char *)buf, size, key, ciphertext);
+    // if appending
+    if (offset > 0) {
+        int status = read_and_decrypt(fpath, key, &existing_plain, &existing_length);
+        if (status < 0) 
+            return status;
+
+        // get the combined (old and new) text into new_plaintext
+        plain_length = existing_length + size; // total length
+        new_plaintext = malloc(plain_length);
+        if (!new_plaintext) {
+            free(existing_plain);
+            return -ENOMEM;
+        }
+        memcpy(new_plaintext, existing_plain, existing_length); // copies in old contents
+        memcpy(new_plaintext + existing_length, buf, size);  // copies in the content we are appending
+        free(existing_plain);
+
+    // if overwriting, just set new_plaintext to the buffer
+    } else {
+        plain_length = size;
+        new_plaintext = malloc(size);
+        if (!new_plaintext) return -ENOMEM;
+        memcpy(new_plaintext, buf, size);
+    }
+
+    unsigned char *ciphertext = malloc(plain_length + 1024); // Padding for header/IV/tag
+    if (!ciphertext) {
+        free(new_plaintext);
+        return -ENOMEM;
+    }
+
+    enc_len = encrypt_data(new_plaintext, plain_length, key, ciphertext);
+    free(new_plaintext);
     if (enc_len < 0) {
         free(ciphertext);
         return -EIO;
