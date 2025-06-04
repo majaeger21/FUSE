@@ -10,7 +10,10 @@
 
 #define FUSE_USE_VERSION 26
 
-// #include <config.h>
+#define ENC_HEADER "ENCFS"
+#define ENC_HEADER_LEN 5
+#define IV_LEN 16
+#define TAG_LEN 16
 
 #ifdef linux
 /* For pread()/pwrite() */
@@ -18,6 +21,9 @@
 #endif
 
 #include "mirror_fs.h"
+
+#include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include <fuse.h>
 #include <stdio.h>
@@ -32,6 +38,9 @@
 #include <sys/xattr.h>
 #endif
 
+
+//////////////////// FUSE OPERATIONS ////////////////////
+
 static int xmp_getattr(const char *path, struct stat *stbuf)
 {
     int res;
@@ -39,10 +48,13 @@ static int xmp_getattr(const char *path, struct stat *stbuf)
 
     mir_path(fpath, path);
 
-    res = lstat(fpath, stbuf);
-    if (res == -1)
-        return -errno;
+    fprintf(stderr, "DEBUG: getattr called for %s -> %s\n", path, fpath);
+    fflush(stderr);
 
+    res = lstat(fpath, stbuf);
+    if (res == -1) {
+        return -errno;
+    }
     return 0;
 }
 
@@ -287,6 +299,9 @@ static int xmp_open(const char *path, struct fuse_file_info *fi)
 
     mir_path(fpath, path);
 
+    fprintf(stderr, "DEBUG: open called for %s -> %s\n", path, fpath);
+    fflush(stderr);
+
     res = open(fpath, fi->flags);
     if (res == -1)
         return -errno;
@@ -298,10 +313,8 @@ static int xmp_open(const char *path, struct fuse_file_info *fi)
 static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi)
 {
-    int fd;
-    int res;
+    int fd, res, decrypted_len;
     char fpath[PATH_MAX];
-
     mir_path(fpath, path);
 
     (void) fi;
@@ -309,34 +322,95 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
     if (fd == -1)
         return -errno;
 
-    res = pread(fd, buf, size, offset);
-    if (res == -1)
-        res = -errno;
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        close(fd);
+        return -errno;
+    }
 
+    unsigned char *file_data = malloc(st.st_size);
+    if (!file_data) {
+        close(fd);
+        return -ENOMEM;
+    }
+
+    ssize_t rlen = read(fd, file_data, st.st_size);
+    if (rlen!= st.st_size) {
+        free(file_data);
+        close(fd);
+        return -errno;
+    }
     close(fd);
+
+    struct fuse_context *ctx = fuse_get_context();
+    MirData *m_data = (MirData *) ctx->private_data;
+    unsigned char *key = m_data->key;
+
+    unsigned char *plaintext = malloc(st.st_size);  // ciphertext is always ≥ plaintext
+    if (!plaintext) {
+        free(file_data);
+        return -ENOMEM;
+    }
+
+    decrypted_len = decrypt_data(file_data, rlen, key, plaintext);
+
+    res = 0;
+    if (decrypted_len == -2) {
+        // Plaintext passthrough
+        if (offset < st.st_size) {
+            if (offset + size > st.st_size)
+                size = st.st_size - offset;
+            memcpy(buf, file_data + offset, size);
+            res = size;
+        }
+    } else if (decrypted_len >= 0) {
+        if (offset < decrypted_len) {
+            if (offset + size > decrypted_len)
+                size = decrypted_len - offset;
+            memcpy(buf, plaintext + offset, size);
+            res = size;
+        }
+    } else {
+        res = -EIO;  // Decryption failed
+    }
+
+    free(file_data);
+    free(plaintext);
     return res;
 }
 
 static int xmp_write(const char *path, const char *buf, size_t size,
                      off_t offset, struct fuse_file_info *fi)
 {
-    int fd;
-    int res;
+    int fd, res, enc_len;
     char fpath[PATH_MAX];
-
     mir_path(fpath, path);
 
-    (void) fi;
-    fd = open(fpath, O_WRONLY);
-    if (fd == -1)
+    struct fuse_context *ctx = fuse_get_context();
+    MirData *m_data = (MirData *) ctx->private_data;
+    unsigned char *key = m_data->key;
+
+    unsigned char *ciphertext = malloc(size + 1024); // Padding for header/IV/tag
+    if (!ciphertext) return -ENOMEM;
+
+    enc_len = encrypt_data((unsigned char *)buf, size, key, ciphertext);
+    if (enc_len < 0) {
+        free(ciphertext);
+        return -EIO;
+    }
+
+    fd = open(fpath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd == -1) {
+        free(ciphertext);
         return -errno;
+    }
 
-    res = pwrite(fd, buf, size, offset);
-    if (res == -1)
-        res = -errno;
-
+    res = write(fd, ciphertext, enc_len);
     close(fd);
-    return res;
+    free(ciphertext);
+
+    if (res != enc_len) return -EIO;
+    return size;
 }
 
 static int xmp_statfs(const char *path, struct statvfs *stbuf)
@@ -450,12 +524,111 @@ void mir_usage() {
     exit(EXIT_FAILURE);    
 }
 
-/* Append path to mirror directory. Haven't tested this yet. */
+/* Append path to mirror directory */
 void mir_path(char fpath[PATH_MAX], const char *path) {
     struct fuse_context *ctx = fuse_get_context();
     MirData *m_data = (MirData *) ctx->private_data;
     snprintf(fpath, PATH_MAX, "%s/%s", m_data->mir_dir, path);
 }
+
+//////////////////// ENCRYPT/DECRYPT OPERATIONS ////////////////////
+
+int encrypt_data(const unsigned char *plaintext, int plaintext_len, 
+                 const unsigned char *key, unsigned char *ciphertext) {
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return -1;
+
+    unsigned char iv[IV_LEN];
+    if (RAND_bytes(iv, IV_LEN) != 1) return -1;
+
+    int len, ciphertext_len;
+
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) return -1;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, IV_LEN, NULL) != 1) return -1;
+    if (EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1) return -1;
+
+    // Write header and IV
+    memcpy(ciphertext, ENC_HEADER, ENC_HEADER_LEN);
+    memcpy(ciphertext + ENC_HEADER_LEN, iv, IV_LEN);
+
+    if (EVP_EncryptUpdate(ctx, ciphertext + ENC_HEADER_LEN + IV_LEN, &len, plaintext, plaintext_len) != 1) return -1;
+    ciphertext_len = len;
+
+    if (EVP_EncryptFinal_ex(ctx, ciphertext + ENC_HEADER_LEN + IV_LEN + ciphertext_len, &len) != 1) return -1;
+    ciphertext_len += len;
+
+    unsigned char tag[TAG_LEN];
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, TAG_LEN, tag) != 1) return -1;
+    memcpy(ciphertext + ENC_HEADER_LEN + IV_LEN + ciphertext_len, tag, TAG_LEN);
+
+    EVP_CIPHER_CTX_free(ctx);
+    return ENC_HEADER_LEN + IV_LEN + ciphertext_len + TAG_LEN;
+}
+
+int decrypt_data(const unsigned char *ciphertext, int ciphertext_len,
+                 const unsigned char *key, unsigned char *plaintext) {
+    
+    if (ciphertext_len < ENC_HEADER_LEN + IV_LEN + TAG_LEN) {
+        return -2;
+    }
+
+    if (memcmp(ciphertext, ENC_HEADER, ENC_HEADER_LEN) != 0) {
+        return -2; // Not encrypted — plaintext passthrough
+    }
+
+    const unsigned char *iv = ciphertext + ENC_HEADER_LEN;
+    const unsigned char *ct = iv + IV_LEN;
+    int ct_len = ciphertext_len - ENC_HEADER_LEN - IV_LEN - TAG_LEN;
+    const unsigned char *tag = ciphertext + ciphertext_len - TAG_LEN;
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return -1;
+
+    int len, plaintext_len;
+
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, IV_LEN, NULL) != 1 ||
+        EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    if (EVP_DecryptUpdate(ctx, plaintext, &len, ct, ct_len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    plaintext_len = len;
+
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, TAG_LEN, (void *)tag) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    int ret = EVP_DecryptFinal_ex(ctx, plaintext + len, &len);
+    EVP_CIPHER_CTX_free(ctx);
+
+    if (ret > 0) {
+        plaintext_len += len;
+        return plaintext_len;
+    }
+
+    return -1;
+}
+
+int derive_key(const char *passphrase, const unsigned char *salt, unsigned char *key_out) {
+    if (PKCS5_PBKDF2_HMAC(passphrase, strlen(passphrase),
+                          salt, 16,
+                          100000,
+                          EVP_sha256(),
+                          32, key_out) != 1) {
+        fprintf(stderr, "Failed to derive encryption key\n");
+        return -1;
+    }
+    return 0;
+}
+
+//////////////////// MAIN FUNCTION ////////////////////
 
 int main(int argc, char *argv[])
 {
@@ -476,11 +649,45 @@ int main(int argc, char *argv[])
         perror("realpath");
         exit(EXIT_FAILURE);
     }
-    // removes the mirror directory from argc/argv since fuse_main only takes mountpoint
+
+    // Salt logic
+    unsigned char salt[16];
+    char salt_path[PATH_MAX];
+    snprintf(salt_path, PATH_MAX, "%s/.salt", m_data.mir_dir);
+
+    FILE *salt_file = fopen(salt_path, "rb");
+    if (salt_file) {
+        if (fread(salt, 1, 16, salt_file) != 16) {
+            fprintf(stderr, "Failed to read salt from file\n");
+            fclose(salt_file);
+            exit(EXIT_FAILURE);
+        }
+        fclose(salt_file);
+    } else {
+        if (RAND_bytes(salt, 16) != 1) {
+            fprintf(stderr, "Failed to generate salt\n");
+            exit(EXIT_FAILURE);
+        }
+
+        salt_file = fopen(salt_path, "wb");
+        if (!salt_file || fwrite(salt, 1, 16, salt_file) != 16) {
+            fprintf(stderr, "Failed to write salt to file\n");
+            if (salt_file) fclose(salt_file);
+            exit(EXIT_FAILURE);
+        }
+        fclose(salt_file);
+    }
+
+    if (derive_key(passphrase, salt, m_data.key) != 0) {
+        exit(EXIT_FAILURE);
+    }
+
+    // Removes the mirror directory from argc/argv since fuse_main only takes mountpoint
     argv[argc-1] = NULL;
     argc--;
 
     int ret =  fuse_main(argc, argv, &xmp_oper, &m_data);
     free(m_data.mir_dir);
+    memset(passphrase, 0, sizeof(passphrase));
     return ret;
 }
