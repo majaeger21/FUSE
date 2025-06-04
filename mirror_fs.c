@@ -709,7 +709,10 @@ int main(int argc, char *argv[])
 
     // Get passphrase from user to be used to derive an encryption key
     printf("Passphrase: ");
-    fgets(passphrase, MAX_PW_LEN, stdin); // TODO: Err handle
+    if (fgets(passphrase, MAX_PW_LEN, stdin) == NULL && ferror(stdin)) {
+        perror("fgets");
+        exit(EXIT_FAILURE);
+    } 
     passphrase[strcspn(passphrase, "\n")] = '\0';
     derive_key(passphrase);
     memset(passphrase, 0, sizeof(passphrase));
