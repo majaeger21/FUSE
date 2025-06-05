@@ -21,4 +21,5 @@ int encrypt_data(const unsigned char *plaintext, int plaintext_len,
                  unsigned char *ciphertext);
 int decrypt_data(const unsigned char *ciphertext, int ciphertext_len,
                  unsigned char *plaintext);
+static int read_and_decrypt(const char *fpath, unsigned char **plaintext_out, size_t *p_length_out);
 #endif

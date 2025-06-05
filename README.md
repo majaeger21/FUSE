@@ -20,10 +20,8 @@
 
 ### How to clean up multiple mirror_fs processes and force unmount (clean slate)
 1. pkill -9 mirror_fs
-2. fusermount -u /tmp/mirror_mnt 2>/dev/null || true
-  fusermount -u /tmp/mirror_mnt2 2>/dev/null || true
-  umount -fl /tmp/mirror_mnt 2>/dev/null || true
-  umount -fl /tmp/mirror_mnt2 2>/dev/null || true
+2. fusermount -u /tmp/mirror_mnt 2>/dev/null
+    - if you get an error run: rm /tmp/mirror_mnt/*
 3. rm /tmp/mirror_src/.salt
 4. ps aux | grep mirror_fs     --> check if all other processes are killed
 5. make clean && make

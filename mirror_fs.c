@@ -262,17 +262,76 @@ static int xmp_chown(const char *path, uid_t uid, gid_t gid)
 
 static int xmp_truncate(const char *path, off_t size)
 {
-    int res;
+    int fd, res, enc_len;
     char fpath[PATH_MAX];
-
     mir_path(fpath, path);
 
-    res = truncate(fpath, size);
-    if (res == -1)
+    if (size != 0) {
+        unsigned char *plaintext = NULL;
+        size_t plain_len = 0;
+        int fd, enc_len;
+
+        int status = read_and_decrypt(fpath, &plaintext, &plain_len);
+        if (status < 0) return status;
+
+        if (size > plain_len) size = plain_len;  // clamp size to existing data
+
+        unsigned char *new_plain = malloc(size);
+        if (!new_plain) {
+            free(plaintext);
+            return -ENOMEM;
+        }
+        memcpy(new_plain, plaintext, size);
+        free(plaintext);
+
+        unsigned char *ciphertext = malloc(size + 1024); // padding for encryption
+        if (!ciphertext) {
+            free(new_plain);
+            return -ENOMEM;
+        }
+
+        enc_len = encrypt_data(new_plain, size, ciphertext);
+        free(new_plain);
+        if (enc_len < 0) {
+            free(ciphertext);
+            return -EIO;
+        }
+
+        fd = open(fpath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd == -1) {
+            free(ciphertext);
+            return -errno;
+        }
+
+        int res = write(fd, ciphertext, enc_len);
+        close(fd);
+        free(ciphertext);
+
+        if (res != enc_len) return -EIO;
+
+        return 0;
+    }
+
+    unsigned char dummy[1] = {0}; // empty plaintext
+    unsigned char ciphertext[ENC_HEADER_LEN + IV_LEN + 128]; // just enough for header, IV, padding
+
+    enc_len = encrypt_data(dummy, 0, ciphertext);
+    if (enc_len < 0)
+        return -EIO;
+
+    fd = open(fpath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd == -1)
         return -errno;
+
+    res = write(fd, ciphertext, enc_len);
+    close(fd);
+
+    if (res != enc_len)
+        return -EIO;
 
     return 0;
 }
+
 
 static int xmp_utimens(const char *path, const struct timespec ts[2])
 {
